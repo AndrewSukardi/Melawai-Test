@@ -1,0 +1,1 @@
+from .ingest_docs import process_document
