@@ -6,9 +6,11 @@ from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from config import Database,vectorDatabase,Reg
 from loguru import logger as log
-from functions import process_document
+from functions import process_document,IngestResponse,RagChatbot,OpenAISetup
+from dotenv import load_dotenv
 
 
+load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,9 +27,12 @@ async def lifespan(app: FastAPI):
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     """)
+    
+    Reg['ai'] = OpenAISetup()
+    
 
-    _vec_db = vectorDatabase('data/chroma_db')
-    Reg['vec_db'] = _vec_db
+    Reg['vec_db'] = vectorDatabase('data/chroma_db')
+    
     log.info("Vector Database Connected")
 
 
@@ -46,9 +51,7 @@ app = FastAPI(lifespan=lifespan,title="AI RAG for Melawai Test",swagger_ui_param
 class ChatApiModel(BaseModel):
     msg: str
     
-class IngestResponse(BaseModel):
-    document_id: int
-    total_chunk: int
+
 
 class VecDataDeleteRequest(BaseModel):
     ids: Optional[list[Any]] = None
@@ -65,14 +68,14 @@ async def ingest(
 
     res = await process_document(file)
     
-    return IngestResponse(document_id=res['document_id'], total_chunk=res['total_chunk'])
+    return res
 
 @app.post('/chat',status_code=200, response_model=ChatApiModel)
 async def chat(
     data: ChatApiModel
 ):
-
-    return 
+    res = await RagChatbot(data.msg)
+    return ChatApiModel(msg=res)
 
 
 @app.get("/vec_data")

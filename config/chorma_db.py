@@ -44,9 +44,9 @@ class vectorDatabase():
         return final_data
             
     
-    def retrive(self,query: list[str], limit: int = 5, fliter: Optional[dict] = None) ->list:
+    def search(self,query: list[str], limit: int = 5, where_filter: Optional[dict] = None) ->list:
 
-        if not filter:
+        if not where_filter:
             return self.collection.query(
                 query_texts= query,
                 n_results=limit
@@ -55,7 +55,7 @@ class vectorDatabase():
         else:
             return self.collection.query(
                     query_texts= query,
-                    where= filter,
+                    where= where_filter,
                     n_results=limit
                 )
 
