@@ -6,6 +6,7 @@ AI yang digunakan llama-3.3-70b-versatile
 
 # API
 | EndPoint  | Description                                           | Method    |
+| ---        | ---                                                  | ---       |
 | /ingest   | Untuk mengupload document dan dirubah menjadi vektor  | Post      |
 | /chat     | Untuk menanyakan menanyakan AI mengenai document      | Post      |
 | /vec_data | Untuk melihat data di dalam database Vector           | Get       |
