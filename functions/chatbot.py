@@ -11,7 +11,16 @@ def OpenAISetup():
     api_key=os.environ["GROQ_API_KEY"],
     
     )
-    
+
+def get_heading(meta: dict, max_level: int = 6):
+    heading = None
+    for level in range(1, max_level + 1):
+        key = f"h{level}"
+        if meta.get(key):
+            heading = meta[key]
+    return heading
+   
+   
 def build_context(documents: list[str],metadatas:Optional[list[dict]] = None):
     
     parts = []
@@ -35,11 +44,11 @@ def build_context(documents: list[str],metadatas:Optional[list[dict]] = None):
             meta = metadatas[c]
             doc = documents[c]
             
-            print(meta)
-            page_data = meta.get("page_numbers", ["?"])
+            
+            page_data = meta.get("page", "?")
             page = ",".join(str(p) for p in page_data) if isinstance(page_data, list) else page_data
             
-            heading = meta.get("headings", "")
+            heading = get_heading(meta)
             filename = meta.get("file_name","")
             
             

@@ -1,25 +1,26 @@
 from io import BytesIO
+import re
 from transformers import AutoTokenizer
-from docling.chunking import HybridChunker
 from docling.document_converter import (
     DocumentConverter,
     PdfFormatOption,
 )
 from collections import Counter
 from pydantic import BaseModel
-from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
 from docling.document_converter import DocumentConverter
 from docling.datamodel.base_models import DocumentStream,InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling_core.types.doc import ContentLayer
 from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
-from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
-from docling_core.types.doc.labels import DocItemLabel
 from fastapi import UploadFile
 from config import Reg,Database,vectorDatabase
 from loguru import logger as log
+from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
+
 
 pipeline_options = PdfPipelineOptions()
+PAGE_BREAK_TOKEN = "<<<PAGE_BREAK>>>"
+PAGE_MARKER = f"\n\n{PAGE_BREAK_TOKEN}\n\n"
+
 
 pipeline_options.layout_options.engine_options.compile_model = False
 
@@ -32,26 +33,64 @@ converter = DocumentConverter(
     }
 )
 
-tokenizer = HuggingFaceTokenizer(
-tokenizer=AutoTokenizer.from_pretrained("BAAI/bge-m3"),
-max_tokens=512,
+raw_tokenizer = AutoTokenizer.from_pretrained("BAAI/bge-m3")
+
+token_splitter = RecursiveCharacterTextSplitter.from_huggingface_tokenizer(
+    raw_tokenizer,          
+    chunk_size=300,
+    chunk_overlap=40,
 )
 
-chunker = HybridChunker(
-tokenizer=tokenizer,
-merge_peers=True,
-)
 
 class IngestResponse(BaseModel):
     document_id: int
     file_name: str
     total_chunk: int
     
-class _OrphanChunk:
-    __slots__ = ("text", "meta")
+
     
-def _normalize(text: str) -> str:
-    return " ".join(text.strip().split())
+def get_headers_to_split_on(markdown_text, max_level=6):
+  
+    found_levels = set()
+    for line in markdown_text.split("\n"):
+        match = re.match(r'^(#{1,6})\s+.+', line)
+        if match:
+            found_levels.add(len(match.group(1)))  # number of # symbols
+
+    headers_to_split_on = [
+        ("#" * level, f"h{level}")
+        for level in sorted(found_levels)
+        if level <= max_level
+    ]
+    return headers_to_split_on
+
+
+def compute_page_range(text_segment: str, page_before: int):
+    """Count markers inside this segment to get its page span."""
+    
+    
+    body = text_segment.rstrip()
+    trailing_count = 0
+
+    while body.endswith(PAGE_BREAK_TOKEN):
+        body = body[: -len(PAGE_BREAK_TOKEN)].rstrip()
+        trailing_count += 1
+
+    internal_count = body.count(PAGE_BREAK_TOKEN) 
+
+    start_page = page_before
+    end_page = page_before + internal_count
+    next_page_start = end_page + trailing_count
+
+    return start_page, end_page, next_page_start
+
+def strip_page_markers(text: str) -> str:
+    # remove the token plus any surrounding whitespace Docling added around it
+    return re.sub(r'\s*' + re.escape(PAGE_BREAK_TOKEN) + r'\s*', '\n\n', text).strip()
+
+
+def page_label(start_page: int, end_page: int) -> str:
+    return str(start_page) if start_page == end_page else f"{start_page}-{end_page}"
 
 async def chuck_document(file: UploadFile):
     
@@ -61,85 +100,54 @@ async def chuck_document(file: UploadFile):
         name=file.filename or "document.pdf",
         stream=BytesIO(content),
     )
-
-    result = converter.convert(source)
-
-    doc = result.document
     
-    chunks = list(chunker.chunk(doc))
+      # unlikely to collide with real content
+
+
+    doc = converter.convert(source).document
+    markdown_text = doc.export_to_markdown(page_break_placeholder=PAGE_MARKER)
     
-    used_item_refs = set()
-    used_heading_texts = set()
-    for c in chunks:
-        for item in (c.meta.doc_items or []):
-            ref = getattr(item, "self_ref", None)
-            if ref is not None:
-                used_item_refs.add(ref)
-        for h in (c.meta.headings or []):
-            used_heading_texts.add(_normalize(h))
-
-    orphan_chunks = []
-    seen_keys = set()
+    print(f"Total page markers found: {markdown_text.count(PAGE_MARKER)}")
+    print(f"Total pages in doc: {len(doc.pages)}")
     
-    for item, _ in doc.iterate_items(included_content_layers={ContentLayer.BODY}):
-        label = getattr(item, "label", None)
-        if label not in (DocItemLabel.SECTION_HEADER, DocItemLabel.TITLE):
-            continue
-        text = _normalize(item.text or "")
-        if not text:
-            continue
-        ref = getattr(item, "self_ref", None)
-        if (ref is not None and ref in used_item_refs) or text in used_heading_texts:
-            continue
-
-        page_no = item.prov[0].page_no if item.prov else None
-        key = (page_no, text)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-
-        oc = _OrphanChunk()
-        oc.text = item.text.strip()
-        oc.meta = type("meta", (), {"headings": [], "doc_items": [item]})()
-        orphan_chunks.append(oc)
+    
+    headers_to_split_on = get_headers_to_split_on(markdown_text)
+    
+    final_chunks = []
+    current_page = 1
+    
+    if not headers_to_split_on:
+        sections = [type("S", (), {"page_content": markdown_text, "metadata": {}})()]
         
-    furniture_items = list(
-        doc.iterate_items(included_content_layers={ContentLayer.FURNITURE})
-    )
+    else:
+        md_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on,strip_headers=False)
+        sections = md_splitter.split_text(markdown_text)
 
-    text_counts = Counter()
-    for item, _ in furniture_items:
-        text = _normalize(getattr(item, "text", "") or "")
-        if text:
-            text_counts[text] += 1
-
-    MIN_TEXT_LEN = 8  
-
-    for item, _ in furniture_items:
-        text_norm = _normalize(item.text or "")
-        if not text_norm or len(text_norm) < MIN_TEXT_LEN:
-            continue 
-
-        
-        if text_counts[text_norm] > 1:
-            continue
-
-        if text_norm in used_heading_texts:
-            continue
-
-        page_no = item.prov[0].page_no if item.prov else None
-        key = (page_no, text_norm)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-
-        oc = _OrphanChunk()
-        oc.text = item.text.strip()
-        oc.meta = type("meta", (), {"headings": [], "doc_items": [item]})()
-        orphan_chunks.append(oc)
     
-    
-    return chunks + orphan_chunks
+    for section in sections:
+        start_page, end_page, next_page_start = compute_page_range(section.page_content, current_page)
+        current_page = next_page_start  
+
+        clean_text = strip_page_markers(section.page_content)
+        sub_chunks = token_splitter.split_text(clean_text)
+
+        if not sub_chunks and section.metadata:
+            heading_path = " > ".join(v for v in section.metadata.values() if v)
+            final_chunks.append({
+                "text": heading_path,
+                "metadata": {**section.metadata,
+                            "page": page_label(start_page, end_page), "heading_only": True}
+            })
+            continue
+
+        for sc in sub_chunks:
+            final_chunks.append({
+                        "text": sc,   # no heading prefix — metadata already has it
+                        "metadata": {**section.metadata,
+                                    "page": page_label(start_page, end_page)}
+                    })
+                
+    return final_chunks
 
 
 async def process_document(file: UploadFile):
@@ -167,25 +175,15 @@ async def process_document(file: UploadFile):
         
         for i,chunk in enumerate(chunks):
             
-            pages = sorted({
-                prov.page_no
-                for item in chunk.meta.doc_items
-                for prov in item.prov
-            })
-            
-            headings = chunk.meta.headings or []
             
             ids.append(f"{document_id}-{i}")
             metadatas.append({
                 "document_id": document_id,
                 "chunk_index": i,
                 "file_name": file.filename,
-                "page_numbers": pages,  
-                "page_start": pages[0] if pages else -1,
-                "page_end": pages[-1] if pages else -1,
-                "headings": " > ".join(headings) if headings else "",
+                **chunk["metadata"]
             })
-            text.append(chunk.text)
+            text.append(chunk['text'])
             
         log.debug(f"Chunk Result: {ids}, {text}, {metadatas}")
         
