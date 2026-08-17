@@ -25,12 +25,14 @@ Status Code:
     201 (created)
 
 Response Body: 
-    {
-    "document_id": int,
-    "file_name": "string",
-    "total_chunk": int
-    }
 
+```json
+{
+  "document_id": 0,
+  "file_name": "string",
+  "total_chunk": 0
+}
+```
 
 ## Chat
 
@@ -38,9 +40,11 @@ Response Body:
 
 Body (json) : 
 
-    {
-    "msg": "string"
-    }
+  ```json
+  {
+  "msg": "string"
+  }
+  ```
 
 ### Response
 
@@ -48,10 +52,12 @@ Status Response:
     200
 
 Response Body: 
-    {
-    "msg": "string"
-    }
 
+```json 
+{
+"msg": "string"
+} 
+```
 
 ## Vec_data
 
@@ -66,7 +72,9 @@ No Request
 status response: 
     200
 
-Response Body: 
+Response Body:
+
+```json
 [
   {
     "id": "string",
@@ -81,13 +89,16 @@ Response Body:
       "document_id": int
     }
   }
-]
+] 
+```
 
 ### Delete
 
 #### Request 
 
 Body (json):
+
+```json
 {
   "ids": [
     "string"
@@ -96,6 +107,7 @@ Body (json):
     "additionalProp1": {}
   }
 }
+```
 
 #### Response
 
