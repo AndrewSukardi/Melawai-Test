@@ -4,6 +4,18 @@ Sitem pencarian dokumen dengan sistem chatbot menggunakan AI.
 
 AI yang digunakan llama-3.3-70b-versatile
 
+Untuk penggunaan endpoint /chat harus terlebih dahulu membuat file .env di dalam file project
+dengan nama variable GROQ_API_KEY
+agar dapat mengakases AI dari Groq
+
+.env tidak saya di repo untuk keamanan token
+
+
+# Link Video
+
+https://drive.google.com/file/d/1Zw38Smt84flfTk7Pszgm8CRqoCQGeYx1/view
+
+
 # API
 | EndPoint  | Description                                           | Method    |
 | ---        | ---                                                  | ---       |
@@ -82,9 +94,7 @@ Response Body:
     "Metadata": {
       "headings": "string",
       "file_name": "string",
-      "page_start": int,
-      "page_end": int,
-      "page_numbers": [],
+      "page": "5",
       "chunk_index": int,
       "document_id": int
     }
